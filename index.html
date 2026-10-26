@@ -57,7 +57,8 @@
     border: 1px solid #444;
     background: linear-gradient(to bottom, #3a362d 0%, #1b1a17 60%, #121110 100%);
   }
-  .chart-wrap canvas { cursor: crosshair; }
+  /* 차트 위에서 터치로 십자선을 움직일 때 페이지가 스크롤/확대되지 않게 한다 */
+  .chart-wrap canvas { cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .chart-wrap .wm {
     position: absolute; top: 6px; right: 10px;
     font-size: 9px; color: #888; pointer-events: none;
@@ -247,13 +248,24 @@ function nearestPoint(t) {
 // 마우스 포인터 십자선 + 해당 위치 선물값 표시
 const crosshair = {
   id: 'crosshair',
-  afterEvent(chart, args) {
-    const e = args.event, a = chart.chartArea;
-    // 오른쪽 라벨 여백(차트 영역 밖)까지 포함해서 반응한다
-    const inside = e.type !== 'mouseout' &&
-      e.x >= a.left && e.x <= chart.width && e.y >= a.top && e.y <= a.bottom;
-    chart.$cross = inside ? { x: Math.min(e.x, a.right), y: e.y } : null;
-    args.changed = true;
+  // 마우스·터치를 포인터 이벤트로 직접 받는다 (touch-action: none 과 함께 써서 페이지 스크롤 방지)
+  afterInit(chart) {
+    const cv = chart.canvas;
+    const move = e => {
+      const r = cv.getBoundingClientRect();
+      const ex = e.clientX - r.left, ey = e.clientY - r.top;
+      const a = chart.chartArea;
+      // 오른쪽 라벨 여백(차트 영역 밖)까지 포함해서 반응한다
+      const inside = ex >= a.left && ex <= chart.width && ey >= a.top && ey <= a.bottom;
+      chart.$cross = inside ? { x: Math.min(ex, a.right), y: ey } : null;
+      chart.draw();
+    };
+    cv.addEventListener('pointerdown', move);
+    cv.addEventListener('pointermove', move);
+    // 마우스는 차트를 벗어나면 숨기고, 터치는 손을 떼도 마지막 위치를 남겨 둔다
+    cv.addEventListener('pointerleave', e => {
+      if (e.pointerType === 'mouse') { chart.$cross = null; chart.draw(); }
+    });
   },
   afterDraw(chart) {
     const c = chart.$cross;
@@ -345,6 +357,7 @@ function buildChart() {
     }]},
     options: {
       animation: false, maintainAspectRatio: false, parsing: false,
+      events: [],  // 십자선은 crosshair 플러그인이 포인터 이벤트로 직접 처리
       layout: { padding: { right: 92, left: 6, bottom: 4 } },
       plugins: {
         legend: { display: false },
