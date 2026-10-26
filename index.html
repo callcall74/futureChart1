@@ -225,8 +225,8 @@ const overlay = {
       ctx.restore();
     };
     const t = targets(state.prevClose, state.rv);
-    line(t[0].up, '#7f8fb0', [2, 2], '1차목표: ' + f2(t[0].up));
-    line(t[0].down, '#7f8fb0', [2, 2], '1차목표: ' + f2(t[0].down));
+    line(t[0].up, '#ff6b6b', [4, 3], '상승1차: ' + f2(t[0].up));
+    line(t[0].down, '#7aa2ff', [4, 3], '하락1차: ' + f2(t[0].down));
     line(state.open, '#ffffff', [], '시가: ' + f2(state.open));
     line(last.p, '#22c55e', [3, 3], f2(last.p), true);
   }
@@ -249,9 +249,10 @@ const crosshair = {
   id: 'crosshair',
   afterEvent(chart, args) {
     const e = args.event, a = chart.chartArea;
+    // 오른쪽 라벨 여백(차트 영역 밖)까지 포함해서 반응한다
     const inside = e.type !== 'mouseout' &&
-      e.x >= a.left && e.x <= a.right && e.y >= a.top && e.y <= a.bottom;
-    chart.$cross = inside ? { x: e.x, y: e.y } : null;
+      e.x >= a.left && e.x <= chart.width && e.y >= a.top && e.y <= a.bottom;
+    chart.$cross = inside ? { x: Math.min(e.x, a.right), y: e.y } : null;
     args.changed = true;
   },
   afterDraw(chart) {
@@ -259,7 +260,9 @@ const crosshair = {
     if (!c || !state.points.length) return;
     const { ctx, chartArea: a, scales: { x, y } } = chart;
     const pt = nearestPoint(x.getValueForPixel(c.x));
-    const px = x.getPixelForValue(pt.t.getTime());
+    const ptX = x.getPixelForValue(pt.t.getTime());
+    // 마지막 데이터 이후(아직 오지 않은 시간)의 빈 공간에서는 세로선이 포인터를 따라간다
+    const px = c.x > ptX ? c.x : ptX;
     const py = y.getPixelForValue(pt.p);
     const cursorVal = y.getValueForPixel(c.y);
 
@@ -280,7 +283,7 @@ const crosshair = {
     // 데이터 포인트 표시
     ctx.fillStyle = '#f5f500';
     ctx.strokeStyle = '#000';
-    ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ptX, py, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 
     const badge = (text, bx, by, bg, align) => {
       const w = ctx.measureText(text).width + 10;
@@ -294,9 +297,10 @@ const crosshair = {
     // 오른쪽 축: 포인터 높이의 가격
     badge(f2(cursorVal), a.right + 4, c.y, '#555', 'left');
     // 아래 축: 시각
-    const d = pt.t;
+    const ct = new Date(x.getValueForPixel(px));
     let tx = Math.min(Math.max(px, a.left + 22), a.right - 22);
-    badge(`${pad(d.getHours())}:${pad(d.getMinutes())}`, tx, a.bottom + 9, '#555', 'center');
+    badge(`${pad(ct.getHours())}:${pad(ct.getMinutes())}`, tx, a.bottom + 9, '#555', 'center');
+    const d = pt.t;
 
     // 정보 박스: 해당 시각의 선물값과 전일대비
     const chg = pt.p - state.prevClose;
@@ -400,6 +404,10 @@ function render() {
     $('d' + (i + 1)).textContent = f2(t.down);
   });
 
+  // 상승1차·하락1차 가로선이 항상 보이도록 세로축 범위를 넓힌다
+  const t1 = targets(state.prevClose, state.rv)[0];
+  chart.options.scales.y.suggestedMax = t1.up;
+  chart.options.scales.y.suggestedMin = t1.down;
   chart.data.datasets[0].data = state.points.map(d => ({ x: d.t.getTime(), y: d.p }));
   chart.update('none');
 }
