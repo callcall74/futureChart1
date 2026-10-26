@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>주간선물</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #333;
+    --muted: #747474;
+    --border: #d9d9d9;
+    --cell: #f3f3f3;
+    --bar: #f6f6f6;
+    --up: #e60000;
+    --down: #0000e6;
+    --flat: #333;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Noto Sans KR", "Malgun Gothic", sans-serif;
+    font-size: 14px;
+  }
+  header.top {
+    height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px;
+    border-bottom: 1px solid #e5e5e5;
+  }
+  .brand { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; color: #222; text-decoration: none; }
+  .brand span { color: #c4161c; }
+  .menu-btn { width: 22px; height: 16px; display: grid; gap: 4px; }
+  .menu-btn i { display: block; height: 3px; background: #ccc; border-radius: 1px; }
+
+  .titlebar {
+    background: var(--bar);
+    border-bottom: 1px solid #e5e5e5;
+    padding: 0 24px;
+    height: 38px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .titlebar h1 { margin: 0; font-size: 15px; font-weight: 500; }
+  .crumb { font-size: 11px; color: var(--muted); }
+  .crumb a { color: var(--text); text-decoration: none; }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 24px 60px; }
+
+  .chart-wrap {
+    position: relative;
+    height: 420px;
+    border: 1px solid #444;
+    background: linear-gradient(to bottom, #3a362d 0%, #1b1a17 60%, #121110 100%);
+  }
+  .chart-wrap .wm {
+    position: absolute; top: 6px; right: 10px;
+    font-size: 9px; color: #888; pointer-events: none;
+  }
+
+  .price-line { margin: 24px 0 14px; font-size: 15px; font-weight: 700; }
+  .price-line em { font-style: italic; }
+  .up { color: var(--up); } .down { color: var(--down); } .flat { color: var(--flat); }
+
+  table.grid {
+    width: 100%; border-collapse: collapse; table-layout: fixed;
+    margin-bottom: 10px; text-align: center; font-size: 13px;
+  }
+  table.grid th, table.grid td { border: 1px solid var(--border); padding: 9px 4px; }
+  table.grid th { font-weight: 400; background: #fff; }
+  table.grid td { background: var(--cell); color: #555; }
+  table.grid td.up { color: var(--up); }
+  table.grid td.down { color: var(--down); }
+
+  h2 { font-size: 15px; font-weight: 700; margin: 28px 0 14px; }
+  .notes { margin-top: 26px; font-size: 12.5px; color: #555; line-height: 1.5; }
+  .notes p { margin: 0 0 12px; }
+  .status { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: 8px; }
+
+  .to-top {
+    position: fixed; right: 70px; bottom: 0;
+    width: 38px; height: 28px; border-radius: 4px 4px 0 0;
+    background: #333; color: #fff; border: 0; cursor: pointer; font-size: 14px;
+  }
+
+  @media (max-width: 640px) {
+    header.top, .titlebar { padding: 0 16px; }
+    main { padding: 16px 16px 60px; }
+    .chart-wrap { height: 300px; }
+    table.grid { font-size: 12px; }
+    .to-top { right: 16px; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#">주간시세<span>.</span></a>
+  <div class="menu-btn" aria-hidden="true"><i></i><i></i><i></i></div>
+</header>
+
+<div class="titlebar">
+  <h1>주간선물</h1>
+  <div class="crumb"><a href="#">Home</a> / 주간선물</div>
+</div>
+
+<main>
+  <div class="chart-wrap">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <div class="price-line" id="priceLine">-</div>
+
+  <table class="grid">
+    <tr><th>시가</th><th>고가</th><th>저가</th></tr>
+    <tr><td id="open">-</td><td id="high">-</td><td id="low">-</td></tr>
+  </table>
+  <table class="grid">
+    <tr><th>전일종가</th><th>실현변동성</th><th>갱신시간</th></tr>
+    <tr><td id="dayClose">-</td><td id="rv">-</td><td id="updated">-</td></tr>
+  </table>
+
+  <h2>매매 목표가</h2>
+  <table class="grid">
+    <tr><th>상승 1차</th><th>상승 2차</th><th>상승 3차</th></tr>
+    <tr><td class="up" id="u1">-</td><td class="up" id="u2">-</td><td class="up" id="u3">-</td></tr>
+  </table>
+  <table class="grid">
+    <tr><th>하락 1차</th><th>하락 2차</th><th>하락 3차</th></tr>
+    <tr><td class="down" id="d1">-</td><td class="down" id="d2">-</td><td class="down" id="d3">-</td></tr>
+  </table>
+
+  <div class="notes">
+    <p>시세 출처: 네이버 금융 (KOSPI200 선물 최근월물, 주간 정규장). 지연되거나 실제 체결가와 다를 수 있습니다.</p>
+    <p>실현변동성: 15 미만 안정 · 15~25 보통 · 25~40 활발 · 40 이상 급변</p>
+    <p>매매 목표가는 전일종가와 실현변동성으로 계산한 참고 지표입니다.</p>
+    <p>투자에 따른 최종 책임은 이용자에게 있습니다.</p>
+  </div>
+</main>
+
+<button class="to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" aria-label="맨 위로">▲</button>
+
+<script>
+/* ------------------------------------------------------------------
+ * 데이터: 네이버 금융 KOSPI200 선물(주간) — server.js 가 프록시
+ *   /api/quote  : 현재가·시고저·전일대비 (7초 폴링)
+ *   /api/minute : 당일 1분봉
+ * ------------------------------------------------------------------ */
+const SESSION_OPEN = [8, 45];   // 08:45
+const SESSION_CLOSE = [15, 45]; // 15:45
+const QUOTE_MS = 7000, MINUTE_MS = 60000;
+
+const num = v => parseFloat(String(v).replace(/,/g, ''));
+const parseLdt = s => new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12), +s.slice(12, 14));
+
+const DataSource = {
+  async quote() {
+    const d = (await (await fetch('/api/quote')).json()).datas[0];
+    const p = num(d.closePriceRaw);
+    return {
+      p, open: num(d.openPriceRaw), high: num(d.highPriceRaw), low: num(d.lowPriceRaw),
+      prevClose: +(p - num(d.compareToPreviousClosePriceRaw)).toFixed(2),
+      live: d.marketStatus === 'OPEN', t: new Date(d.localTradedAt)
+    };
+  },
+  async minute() {
+    const a = await (await fetch('/api/minute')).json();
+    return a.map(d => ({ t: parseLdt(d.localDateTime), p: d.currentPrice }));
+  }
+};
+
+/* ------------------------------------------------------------------ */
+const $ = id => document.getElementById(id);
+const f2 = v => v.toFixed(2);
+const pad = n => String(n).padStart(2, '0');
+
+const state = { prevClose: 0, points: [], open: 0, high: 0, low: 0, rv: 0, live: false, updated: null };
+
+// 1분 수익률 기반 연율화 실현변동성(%)
+function realizedVol(points) {
+  if (points.length < 3) return 0;
+  const r = [];
+  for (let i = 1; i < points.length; i++) r.push(Math.log(points[i].p / points[i - 1].p));
+  const m = r.reduce((a, b) => a + b, 0) / r.length;
+  const v = r.reduce((a, b) => a + (b - m) ** 2, 0) / (r.length - 1);
+  return Math.sqrt(v * 252 * 420) * 100;
+}
+
+// 목표가: 전일종가 기준 일간 시그마의 1/2/3.5배
+function targets(base, rv) {
+  const sigma = base * (rv / 100) / Math.sqrt(252);
+  return [1, 2, 3.5].map(k => ({ up: base + sigma * k, down: base - sigma * k }));
+}
+
+// 차트 위 기준선/라벨 그리는 플러그인
+const overlay = {
+  id: 'overlay',
+  afterDatasetsDraw(chart) {
+    const { ctx, chartArea: a, scales: { y } } = chart;
+    const last = state.points[state.points.length - 1];
+    if (!last) return;
+    const line = (val, color, dash, label, badge) => {
+      const py = y.getPixelForValue(val);
+      if (py < a.top || py > a.bottom) return;
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash(dash);
+      ctx.beginPath(); ctx.moveTo(a.left, py); ctx.lineTo(a.right, py); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = '11px "Noto Sans KR", sans-serif';
+      ctx.textBaseline = 'middle';
+      if (badge) {
+        const w = ctx.measureText(label).width + 8;
+        ctx.fillStyle = '#0011ff';
+        ctx.fillRect(a.right + 4, py - 7, w, 14);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, a.right + 8, py);
+      } else {
+        ctx.fillStyle = color;
+        ctx.fillText(label, a.right + 6, py - 2);
+      }
+      ctx.restore();
+    };
+    const t = targets(state.prevClose, state.rv);
+    line(t[0].up, '#7f8fb0', [2, 2], '1차목표: ' + f2(t[0].up));
+    line(t[0].down, '#7f8fb0', [2, 2], '1차목표: ' + f2(t[0].down));
+    line(state.open, '#ffffff', [], '시가: ' + f2(state.open));
+    line(last.p, '#22c55e', [3, 3], f2(last.p), true);
+  }
+};
+
+let chart;
+function sessionBounds(day) {
+  const a = new Date(day), b = new Date(day);
+  a.setHours(SESSION_OPEN[0], SESSION_OPEN[1], 0, 0);
+  b.setHours(SESSION_CLOSE[0], SESSION_CLOSE[1], 0, 0);
+  return [a.getTime(), b.getTime()];
+}
+
+function buildChart() {
+  const [min, max] = sessionBounds(state.points[0].t);
+  chart = new Chart($('chart'), {
+    type: 'line',
+    data: { datasets: [{
+      data: [],
+      borderColor: '#f5f500', borderWidth: 1.4, pointRadius: 0, tension: 0
+    }]},
+    options: {
+      animation: false, maintainAspectRatio: false, parsing: false,
+      layout: { padding: { right: 92, left: 6, bottom: 4 } },
+      plugins: {
+        legend: { display: false },
+        title: { display: true, text: 'KOSPI200 주간선물', color: '#fff',
+                 font: { size: 14, weight: '700' }, padding: { top: 8, bottom: 10 } },
+        tooltip: {
+          mode: 'index', intersect: false, displayColors: false,
+          callbacks: {
+            title: items => { const d = new Date(items[0].parsed.x); return `${d.getMonth()+1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; },
+            label: item => f2(item.parsed.y)
+          }
+        }
+      },
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          type: 'linear', min, max,
+          grid: { color: 'rgba(255,255,255,0.12)' },
+          afterBuildTicks: axis => {
+            // 09:00부터 1시간 간격 + 마감 15:45
+            const ticks = [];
+            for (let h = 9; h <= 15; h++) { const d = new Date(min); d.setHours(h, 0, 0, 0); ticks.push({ value: d.getTime() }); }
+            ticks.push({ value: max });
+            axis.ticks = ticks;
+          },
+          ticks: {
+            color: '#aaa', font: { size: 10 }, autoSkip: false, maxRotation: 0,
+            callback: v => { const d = new Date(v); return [`${d.getMonth()+1}/${d.getDate()}`, `${pad(d.getHours())}:${pad(d.getMinutes())}`]; }
+          }
+        },
+        y: {
+          grid: { color: 'rgba(255,255,255,0.12)' },
+          ticks: { color: '#aaa', font: { size: 10 }, callback: v => f2(v) },
+          grace: '5%'
+        }
+      }
+    },
+    plugins: [overlay]
+  });
+}
+
+function render() {
+  const last = state.points[state.points.length - 1];
+  const chg = last.p - state.prevClose;
+  const pct = chg / state.prevClose * 100;
+  const cls = chg > 0 ? 'up' : chg < 0 ? 'down' : 'flat';
+  const sign = chg > 0 ? '+' : '';
+  $('priceLine').className = 'price-line ' + cls;
+  $('priceLine').innerHTML = `${f2(last.p)} (${sign}${f2(chg)}, <em>${sign}${f2(pct)}%</em>)` +
+    `<span class="status">${state.live ? '● 장중' : '장 마감'}</span>`;
+  document.title = `주간선물: ${f2(last.p)} (${sign}${f2(chg)}, ${sign}${f2(pct)}%)`;
+
+  $('open').textContent = f2(state.open);
+  $('high').textContent = f2(state.high);
+  $('low').textContent = f2(state.low);
+  $('dayClose').textContent = f2(state.prevClose);
+  $('rv').textContent = f2(state.rv);
+  const u = state.updated;
+  $('updated').textContent = `${pad(u.getHours())}:${pad(u.getMinutes())}:${pad(u.getSeconds())}`;
+
+  targets(state.prevClose, state.rv).forEach((t, i) => {
+    $('u' + (i + 1)).textContent = f2(t.up);
+    $('d' + (i + 1)).textContent = f2(t.down);
+  });
+
+  chart.data.datasets[0].data = state.points.map(d => ({ x: d.t.getTime(), y: d.p }));
+  chart.update('none');
+}
+
+// 1분봉 + 최신 체결가를 합쳐 차트 포인트를 만든다
+let minutes = [];
+function merge(q) {
+  const pts = minutes.slice();
+  const lastBar = pts[pts.length - 1];
+  if (!lastBar || q.t - lastBar.t >= 60000) pts.push({ t: q.t, p: q.p });
+  else lastBar.p = q.p;
+  return pts;
+}
+
+function applyQuote(q) {
+  state.prevClose = q.prevClose;
+  state.open = q.open; state.high = q.high; state.low = q.low;
+  state.live = q.live; state.updated = q.t;
+  state.points = merge(q);
+  state.rv = realizedVol(state.points);
+}
+
+(async function init() {
+  try {
+    minutes = await DataSource.minute();
+    applyQuote(await DataSource.quote());
+  } catch (e) {
+    $('priceLine').textContent = '시세를 불러오지 못했습니다. server.js 로 실행했는지 확인하세요.';
+    return;
+  }
+  buildChart();
+  render();
+
+  setInterval(async () => {
+    try { applyQuote(await DataSource.quote()); render(); } catch (e) {}
+  }, QUOTE_MS);
+  setInterval(async () => {
+    try { minutes = await DataSource.minute(); } catch (e) {}
+  }, MINUTE_MS);
+})();
+</script>
+</body>
+</html>
