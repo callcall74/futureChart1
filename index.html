@@ -57,6 +57,7 @@
     border: 1px solid #444;
     background: linear-gradient(to bottom, #3a362d 0%, #1b1a17 60%, #121110 100%);
   }
+  .chart-wrap canvas { cursor: crosshair; }
   .chart-wrap .wm {
     position: absolute; top: 6px; right: 10px;
     font-size: 9px; color: #888; pointer-events: none;
@@ -231,6 +232,97 @@ const overlay = {
   }
 };
 
+// 시각 기준으로 가장 가까운 데이터 포인트 (이진 탐색)
+function nearestPoint(t) {
+  const pts = state.points;
+  let lo = 0, hi = pts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].t.getTime() < t) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && t - pts[lo - 1].t.getTime() < pts[lo].t.getTime() - t) lo--;
+  return pts[lo];
+}
+
+// 마우스 포인터 십자선 + 해당 위치 선물값 표시
+const crosshair = {
+  id: 'crosshair',
+  afterEvent(chart, args) {
+    const e = args.event, a = chart.chartArea;
+    const inside = e.type !== 'mouseout' &&
+      e.x >= a.left && e.x <= a.right && e.y >= a.top && e.y <= a.bottom;
+    chart.$cross = inside ? { x: e.x, y: e.y } : null;
+    args.changed = true;
+  },
+  afterDraw(chart) {
+    const c = chart.$cross;
+    if (!c || !state.points.length) return;
+    const { ctx, chartArea: a, scales: { x, y } } = chart;
+    const pt = nearestPoint(x.getValueForPixel(c.x));
+    const px = x.getPixelForValue(pt.t.getTime());
+    const py = y.getPixelForValue(pt.p);
+    const cursorVal = y.getValueForPixel(c.y);
+
+    ctx.save();
+    ctx.font = '11px "Noto Sans KR", sans-serif';
+    ctx.textBaseline = 'middle';
+
+    // 십자선: 세로선은 가장 가까운 데이터 시각에 맞추고, 가로선은 포인터 높이
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom);
+    ctx.moveTo(a.left, c.y); ctx.lineTo(a.right, c.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 데이터 포인트 표시
+    ctx.fillStyle = '#f5f500';
+    ctx.strokeStyle = '#000';
+    ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+    const badge = (text, bx, by, bg, align) => {
+      const w = ctx.measureText(text).width + 10;
+      const left = align === 'center' ? bx - w / 2 : bx;
+      ctx.fillStyle = bg;
+      ctx.fillRect(left, by - 8, w, 16);
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'left';
+      ctx.fillText(text, left + 5, by);
+    };
+    // 오른쪽 축: 포인터 높이의 가격
+    badge(f2(cursorVal), a.right + 4, c.y, '#555', 'left');
+    // 아래 축: 시각
+    const d = pt.t;
+    let tx = Math.min(Math.max(px, a.left + 22), a.right - 22);
+    badge(`${pad(d.getHours())}:${pad(d.getMinutes())}`, tx, a.bottom + 9, '#555', 'center');
+
+    // 정보 박스: 해당 시각의 선물값과 전일대비
+    const chg = pt.p - state.prevClose;
+    const sign = chg > 0 ? '+' : '';
+    const lines = [
+      `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      `선물 ${f2(pt.p)}`,
+      `${sign}${f2(chg)} (${sign}${f2(chg / state.prevClose * 100)}%)`
+    ];
+    const bw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16;
+    const bh = lines.length * 16 + 8;
+    let bx = px + 12, by = c.y + 12;
+    if (bx + bw > a.right) bx = px - 12 - bw;
+    if (by + bh > a.bottom) by = c.y - 12 - bh;
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+    lines.forEach((l, i) => {
+      ctx.fillStyle = i === 1 ? '#f5f500' : i === 2 ? (chg > 0 ? '#ff6b6b' : chg < 0 ? '#7aa2ff' : '#ddd') : '#ddd';
+      ctx.fillText(l, bx + 8, by + 12 + i * 16);
+    });
+    ctx.restore();
+  }
+};
+
 let chart;
 function sessionBounds(day) {
   const a = new Date(day), b = new Date(day);
@@ -254,13 +346,7 @@ function buildChart() {
         legend: { display: false },
         title: { display: true, text: 'KOSPI200 주간선물', color: '#fff',
                  font: { size: 14, weight: '700' }, padding: { top: 8, bottom: 10 } },
-        tooltip: {
-          mode: 'index', intersect: false, displayColors: false,
-          callbacks: {
-            title: items => { const d = new Date(items[0].parsed.x); return `${d.getMonth()+1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; },
-            label: item => f2(item.parsed.y)
-          }
-        }
+        tooltip: { enabled: false }  // 십자선 플러그인이 대신 표시
       },
       interaction: { mode: 'index', intersect: false },
       scales: {
@@ -286,7 +372,7 @@ function buildChart() {
         }
       }
     },
-    plugins: [overlay]
+    plugins: [overlay, crosshair]
   });
 }
 
