@@ -130,7 +130,7 @@
     <tr><td id="dayClose">-</td><td id="rv">-</td><td id="updated">-</td></tr>
   </table>
 
-  <h2>매매 목표가</h2>
+  <h2>매매 목표가 (코스피)<span class="status" id="targetBase"></span></h2>
   <table class="grid">
     <tr><th>상승 1차</th><th>상승 2차</th><th>상승 3차</th></tr>
     <tr><td class="up" id="u1">-</td><td class="up" id="u2">-</td><td class="up" id="u3">-</td></tr>
@@ -141,9 +141,9 @@
   </table>
 
   <div class="notes">
-    <p>시세 출처: 네이버 금융 (KOSPI200 선물 최근월물, 주간 정규장). 지연되거나 실제 체결가와 다를 수 있습니다.</p>
+    <p>시세 출처: 네이버 금융 (코스피 지수, KOSPI200 선물 최근월물 주간 정규장). 지연되거나 실제 체결가와 다를 수 있습니다.</p>
     <p>실현변동성: 15 미만 안정 · 15~25 보통 · 25~40 활발 · 40 이상 급변</p>
-    <p>매매 목표가는 전일종가와 실현변동성으로 계산한 참고 지표입니다.</p>
+    <p>매매 목표가는 코스피 지수의 전일종가와 실현변동성으로 계산한 참고 지표이며, 코스피 차트에 목표선으로 표시됩니다. 현재가가 시가보다 높으면 상승선, 낮으면 하락선만 보이며, 1차는 항상, 2·3차는 차트 범위에 들어올 때 나타납니다.</p>
     <p>투자에 따른 최종 책임은 이용자에게 있습니다.</p>
   </div>
 </main>
@@ -157,8 +157,9 @@
  *   /api/minute : 당일 1분봉
  *   /api/kospi-quote, /api/kospi-minute : 코스피 지수 (같은 형식)
  * ------------------------------------------------------------------ */
-const FUT = { title: 'KOSPI200 주간선물', label: '선물', api: '', session: [[8, 45], [15, 45]], targets: true };
-const KOSPI = { title: '코스피', label: '코스피', api: 'kospi-', session: [[9, 0], [15, 30]], targets: false };
+// bars: 하루 1분봉 개수 (실현변동성 연율화에 사용), targets: 매매 목표선을 그 차트에 표시
+const FUT = { title: 'KOSPI200 주간선물', label: '선물', api: '', session: [[8, 45], [15, 45]], bars: 420, targets: false };
+const KOSPI = { title: '코스피', label: '코스피', api: 'kospi-', session: [[9, 0], [15, 30]], bars: 390, targets: true };
 const QUOTE_MS = 7000, MINUTE_MS = 60000;
 
 const num = v => parseFloat(String(v).replace(/,/g, ''));
@@ -190,19 +191,25 @@ const state = newState();      // 선물
 const kospi = newState();      // 코스피 지수
 
 // 1분 수익률 기반 연율화 실현변동성(%)
-function realizedVol(points) {
+function realizedVol(points, bars) {
   if (points.length < 3) return 0;
   const r = [];
   for (let i = 1; i < points.length; i++) r.push(Math.log(points[i].p / points[i - 1].p));
   const m = r.reduce((a, b) => a + b, 0) / r.length;
   const v = r.reduce((a, b) => a + (b - m) ** 2, 0) / (r.length - 1);
-  return Math.sqrt(v * 252 * 420) * 100;
+  return Math.sqrt(v * 252 * bars) * 100;
 }
 
 // 목표가: 전일종가 기준 일간 시그마의 1/2/3.5배
 function targets(base, rv) {
   const sigma = base * (rv / 100) / Math.sqrt(252);
   return [1, 2, 3.5].map(k => ({ up: base + sigma * k, down: base - sigma * k }));
+}
+
+// 목표선 방향: 현재가 > 시가 → 1(상승), < → -1(하락), 같으면 0(둘 다)
+function targetSide(s) {
+  const last = s.points[s.points.length - 1];
+  return Math.sign(last.p - s.open);
 }
 
 // 차트 위 기준선/라벨 그리는 플러그인
@@ -214,36 +221,56 @@ const overlay = {
     if (!s) return;  // 생성자 안의 첫 그리기 (아직 상태가 연결되기 전)
     const last = s.points[s.points.length - 1];
     if (!last) return;
+    // 가로선은 바로 그리고, 오른쪽 라벨은 모아 두었다가 겹치지 않게 배치한다
+    const labels = [];
     const line = (val, color, dash, label, badge) => {
       const py = y.getPixelForValue(val);
       if (py < a.top || py > a.bottom) return;
       ctx.save();
       ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash(dash);
       ctx.beginPath(); ctx.moveTo(a.left, py); ctx.lineTo(a.right, py); ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.restore();
+      labels.push({ py, ly: py, color, label, badge });
+    };
+    const drawLabels = () => {
+      const GAP = 14;
+      labels.sort((p, q) => p.py - q.py);
+      for (let i = 1; i < labels.length; i++) labels[i].ly = Math.max(labels[i].ly, labels[i - 1].ly + GAP);
+      // 아래로 밀려 차트 밖으로 나가면 위로 되민다
+      const over = labels.length ? labels[labels.length - 1].ly - a.bottom : 0;
+      if (over > 0) labels.forEach(l => { l.ly -= over; });
+      for (let i = labels.length - 2; i >= 0; i--) labels[i].ly = Math.min(labels[i].ly, labels[i + 1].ly - GAP);
+      ctx.save();
       ctx.font = '11px "Noto Sans KR", sans-serif';
       ctx.textBaseline = 'middle';
-      if (badge) {
-        const w = ctx.measureText(label).width + 8;
-        ctx.fillStyle = '#0011ff';
-        ctx.fillRect(a.right + 4, py - 7, w, 14);
-        ctx.fillStyle = '#fff';
-        ctx.fillText(label, a.right + 8, py);
-      } else {
-        ctx.fillStyle = color;
-        ctx.fillText(label, a.right + 6, py - 2);
-      }
+      labels.forEach(({ ly, color, label, badge }) => {
+        if (badge) {
+          const w = ctx.measureText(label).width + 8;
+          ctx.fillStyle = '#0011ff';
+          ctx.fillRect(a.right + 4, ly - 7, w, 14);
+          ctx.fillStyle = '#fff';
+          ctx.fillText(label, a.right + 8, ly);
+        } else {
+          ctx.fillStyle = color;
+          ctx.fillText(label, a.right + 6, ly);
+        }
+      });
       ctx.restore();
     };
     if (chart.$cfg.targets) {
-      const t = targets(s.prevClose, s.rv);
-      line(t[0].up, '#ff6b6b', [4, 3], '상승1차: ' + f2(t[0].up));
-      line(t[0].down, '#7aa2ff', [4, 3], '하락1차: ' + f2(t[0].down));
+      // 현재가가 시가보다 높으면 상승선만, 낮으면 하락선만 (같으면 둘 다)
+      // 1차는 항상 보이고, 2·3차는 세로축 범위 안에 들어올 때 표시된다
+      const side = targetSide(s);
+      targets(s.prevClose, s.rv).forEach((t, i) => {
+        if (side >= 0) line(t.up, '#ff6b6b', [4, 3], `상승${i + 1}차: ${f2(t.up)}`);
+        if (side <= 0) line(t.down, '#7aa2ff', [4, 3], `하락${i + 1}차: ${f2(t.down)}`);
+      });
     } else {
       line(s.prevClose, '#aaaaaa', [4, 3], '전일: ' + f2(s.prevClose));
     }
     line(s.open, '#ffffff', [], '시가: ' + f2(s.open));
     line(last.p, '#22c55e', [3, 3], f2(last.p), true);
+    drawLabels();
   }
 };
 
@@ -408,13 +435,14 @@ function buildChart(canvasId, s, cfg) {
   return c;
 }
 
-// 차트 데이터 갱신 (선물 차트는 상승·하락 1차 목표선이 항상 보이도록 세로축을 넓힌다)
+// 차트 데이터 갱신 (목표선을 그리는 차트는 보이는 쪽 1차 목표선이 항상 들어오도록 세로축을 넓힌다)
 function updateChart(c) {
   const s = c.$s;
   if (c.$cfg.targets) {
     const t1 = targets(s.prevClose, s.rv)[0];
-    c.options.scales.y.suggestedMax = t1.up;
-    c.options.scales.y.suggestedMin = t1.down;
+    const side = targetSide(s);
+    c.options.scales.y.suggestedMax = side >= 0 ? t1.up : undefined;
+    c.options.scales.y.suggestedMin = side <= 0 ? t1.down : undefined;
   }
   c.data.datasets[0].data = s.points.map(d => ({ x: d.t.getTime(), y: d.p }));
   c.update('none');
@@ -428,6 +456,13 @@ function renderKospi() {
   const t = kospiChart.options.plugins.title;
   t.text = `코스피  ${f2(last.p)}  (${sign}${f2(chg)}, ${sign}${f2(chg / kospi.prevClose * 100)}%)`;
   t.color = chg > 0 ? '#ff6b6b' : chg < 0 ? '#7aa2ff' : '#fff';
+
+  // 매매 목표가: 코스피 전일종가와 코스피 실현변동성 기준
+  targets(kospi.prevClose, kospi.rv).forEach((t, i) => {
+    $('u' + (i + 1)).textContent = f2(t.up);
+    $('d' + (i + 1)).textContent = f2(t.down);
+  });
+  $('targetBase').textContent = `코스피 전일 ${f2(kospi.prevClose)} · 변동성 ${f2(kospi.rv)}`;
   updateChart(kospiChart);
 }
 
@@ -450,11 +485,6 @@ function render() {
   const u = state.updated;
   $('updated').textContent = `${pad(u.getHours())}:${pad(u.getMinutes())}:${pad(u.getSeconds())}`;
 
-  targets(state.prevClose, state.rv).forEach((t, i) => {
-    $('u' + (i + 1)).textContent = f2(t.up);
-    $('d' + (i + 1)).textContent = f2(t.down);
-  });
-
   updateChart(chart);
 }
 
@@ -467,22 +497,22 @@ function merge(minutes, q) {
   return pts;
 }
 
-function applyQuote(s, q) {
+function applyQuote(s, cfg, q) {
   s.prevClose = q.prevClose;
   s.open = q.open; s.high = q.high; s.low = q.low;
   s.live = q.live; s.updated = q.t;
   s.points = merge(s.minutes, q);
-  s.rv = realizedVol(s.points);
+  s.rv = realizedVol(s.points, cfg.bars);
 }
 
 // 1분봉을 받아 차트를 만들고 시세를 주기적으로 갱신한다
 async function startFeed(s, cfg, onReady, onUpdate) {
   s.minutes = await DataSource.minute(cfg.api);
-  applyQuote(s, await DataSource.quote(cfg.api));
+  applyQuote(s, cfg, await DataSource.quote(cfg.api));
   onReady();
   onUpdate();
   setInterval(async () => {
-    try { applyQuote(s, await DataSource.quote(cfg.api)); onUpdate(); } catch (e) {}
+    try { applyQuote(s, cfg, await DataSource.quote(cfg.api)); onUpdate(); } catch (e) {}
   }, QUOTE_MS);
   setInterval(async () => {
     try { s.minutes = await DataSource.minute(cfg.api); } catch (e) {}
