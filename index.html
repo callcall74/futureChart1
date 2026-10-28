@@ -58,6 +58,12 @@
     background: linear-gradient(to bottom, #3a362d 0%, #1b1a17 60%, #121110 100%);
   }
   .chart-wrap.sub { height: 320px; margin-bottom: 12px; }
+  .ext-link {
+    display: inline-block; margin-top: 8px;
+    font-size: 12.5px; color: #555; text-decoration: none;
+    border: 1px solid var(--border); border-radius: 3px; padding: 5px 10px; background: #fff;
+  }
+  .ext-link:hover { color: #222; border-color: #999; }
   /* 차트 위에서 터치로 십자선을 움직일 때 페이지가 스크롤/확대되지 않게 한다 */
   .chart-wrap canvas { cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .chart-wrap .wm {
@@ -118,6 +124,7 @@
   <div class="chart-wrap">
     <canvas id="chart"></canvas>
   </div>
+  <a class="ext-link" href="https://stockhub.kr/charts" target="_blank" rel="noopener noreferrer">야간선물 차트 보기 (StockHub) ↗</a>
 
   <div class="price-line" id="priceLine">-</div>
 
