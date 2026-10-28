@@ -57,6 +57,7 @@
     border: 1px solid #444;
     background: linear-gradient(to bottom, #3a362d 0%, #1b1a17 60%, #121110 100%);
   }
+  .chart-wrap.sub { height: 320px; margin-bottom: 12px; }
   /* 차트 위에서 터치로 십자선을 움직일 때 페이지가 스크롤/확대되지 않게 한다 */
   .chart-wrap canvas { cursor: crosshair; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .chart-wrap .wm {
@@ -93,6 +94,7 @@
     header.top, .titlebar { padding: 0 16px; }
     main { padding: 16px 16px 60px; }
     .chart-wrap { height: 300px; }
+    .chart-wrap.sub { height: 240px; }
     table.grid { font-size: 12px; }
     .to-top { right: 16px; }
   }
@@ -110,6 +112,9 @@
 </div>
 
 <main>
+  <div class="chart-wrap sub">
+    <canvas id="kospiChart"></canvas>
+  </div>
   <div class="chart-wrap">
     <canvas id="chart"></canvas>
   </div>
@@ -150,17 +155,18 @@
  * 데이터: 네이버 금융 KOSPI200 선물(주간) — server.js 가 프록시
  *   /api/quote  : 현재가·시고저·전일대비 (7초 폴링)
  *   /api/minute : 당일 1분봉
+ *   /api/kospi-quote, /api/kospi-minute : 코스피 지수 (같은 형식)
  * ------------------------------------------------------------------ */
-const SESSION_OPEN = [8, 45];   // 08:45
-const SESSION_CLOSE = [15, 45]; // 15:45
+const FUT = { title: 'KOSPI200 주간선물', label: '선물', api: '', session: [[8, 45], [15, 45]], targets: true };
+const KOSPI = { title: '코스피', label: '코스피', api: 'kospi-', session: [[9, 0], [15, 30]], targets: false };
 const QUOTE_MS = 7000, MINUTE_MS = 60000;
 
 const num = v => parseFloat(String(v).replace(/,/g, ''));
 const parseLdt = s => new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12), +s.slice(12, 14));
 
 const DataSource = {
-  async quote() {
-    const d = (await (await fetch('/api/quote')).json()).datas[0];
+  async quote(api = '') {
+    const d = (await (await fetch(`/api/${api}quote`)).json()).datas[0];
     const p = num(d.closePriceRaw);
     return {
       p, open: num(d.openPriceRaw), high: num(d.highPriceRaw), low: num(d.lowPriceRaw),
@@ -168,8 +174,8 @@ const DataSource = {
       live: d.marketStatus === 'OPEN', t: new Date(d.localTradedAt)
     };
   },
-  async minute() {
-    const a = await (await fetch('/api/minute')).json();
+  async minute(api = '') {
+    const a = await (await fetch(`/api/${api}minute`)).json();
     return a.map(d => ({ t: parseLdt(d.localDateTime), p: d.currentPrice }));
   }
 };
@@ -179,7 +185,9 @@ const $ = id => document.getElementById(id);
 const f2 = v => v.toFixed(2);
 const pad = n => String(n).padStart(2, '0');
 
-const state = { prevClose: 0, points: [], open: 0, high: 0, low: 0, rv: 0, live: false, updated: null };
+const newState = () => ({ prevClose: 0, points: [], minutes: [], open: 0, high: 0, low: 0, rv: 0, live: false, updated: null });
+const state = newState();      // 선물
+const kospi = newState();      // 코스피 지수
 
 // 1분 수익률 기반 연율화 실현변동성(%)
 function realizedVol(points) {
@@ -202,7 +210,9 @@ const overlay = {
   id: 'overlay',
   afterDatasetsDraw(chart) {
     const { ctx, chartArea: a, scales: { y } } = chart;
-    const last = state.points[state.points.length - 1];
+    const s = chart.$s;
+    if (!s) return;  // 생성자 안의 첫 그리기 (아직 상태가 연결되기 전)
+    const last = s.points[s.points.length - 1];
     if (!last) return;
     const line = (val, color, dash, label, badge) => {
       const py = y.getPixelForValue(val);
@@ -225,17 +235,20 @@ const overlay = {
       }
       ctx.restore();
     };
-    const t = targets(state.prevClose, state.rv);
-    line(t[0].up, '#ff6b6b', [4, 3], '상승1차: ' + f2(t[0].up));
-    line(t[0].down, '#7aa2ff', [4, 3], '하락1차: ' + f2(t[0].down));
-    line(state.open, '#ffffff', [], '시가: ' + f2(state.open));
+    if (chart.$cfg.targets) {
+      const t = targets(s.prevClose, s.rv);
+      line(t[0].up, '#ff6b6b', [4, 3], '상승1차: ' + f2(t[0].up));
+      line(t[0].down, '#7aa2ff', [4, 3], '하락1차: ' + f2(t[0].down));
+    } else {
+      line(s.prevClose, '#aaaaaa', [4, 3], '전일: ' + f2(s.prevClose));
+    }
+    line(s.open, '#ffffff', [], '시가: ' + f2(s.open));
     line(last.p, '#22c55e', [3, 3], f2(last.p), true);
   }
 };
 
 // 시각 기준으로 가장 가까운 데이터 포인트 (이진 탐색)
-function nearestPoint(t) {
-  const pts = state.points;
+function nearestPoint(pts, t) {
   let lo = 0, hi = pts.length - 1;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
@@ -268,10 +281,10 @@ const crosshair = {
     });
   },
   afterDraw(chart) {
-    const c = chart.$cross;
-    if (!c || !state.points.length) return;
+    const c = chart.$cross, s = chart.$s;
+    if (!c || !s || !s.points.length) return;
     const { ctx, chartArea: a, scales: { x, y } } = chart;
-    const pt = nearestPoint(x.getValueForPixel(c.x));
+    const pt = nearestPoint(s.points, x.getValueForPixel(c.x));
     const ptX = x.getPixelForValue(pt.t.getTime());
     // 마지막 데이터 이후(아직 오지 않은 시간)의 빈 공간에서는 세로선이 포인터를 따라간다
     const px = c.x > ptX ? c.x : ptX;
@@ -314,13 +327,13 @@ const crosshair = {
     badge(`${pad(ct.getHours())}:${pad(ct.getMinutes())}`, tx, a.bottom + 9, '#555', 'center');
     const d = pt.t;
 
-    // 정보 박스: 해당 시각의 선물값과 전일대비
-    const chg = pt.p - state.prevClose;
+    // 정보 박스: 해당 시각의 값과 전일대비
+    const chg = pt.p - s.prevClose;
     const sign = chg > 0 ? '+' : '';
     const lines = [
       `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
-      `선물 ${f2(pt.p)}`,
-      `${sign}${f2(chg)} (${sign}${f2(chg / state.prevClose * 100)}%)`
+      `${chart.$cfg.label} ${f2(pt.p)}`,
+      `${sign}${f2(chg)} (${sign}${f2(chg / s.prevClose * 100)}%)`
     ];
     const bw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16;
     const bh = lines.length * 16 + 8;
@@ -339,17 +352,17 @@ const crosshair = {
   }
 };
 
-let chart;
-function sessionBounds(day) {
+let chart, kospiChart;
+function sessionBounds(day, [open, close]) {
   const a = new Date(day), b = new Date(day);
-  a.setHours(SESSION_OPEN[0], SESSION_OPEN[1], 0, 0);
-  b.setHours(SESSION_CLOSE[0], SESSION_CLOSE[1], 0, 0);
+  a.setHours(open[0], open[1], 0, 0);
+  b.setHours(close[0], close[1], 0, 0);
   return [a.getTime(), b.getTime()];
 }
 
-function buildChart() {
-  const [min, max] = sessionBounds(state.points[0].t);
-  chart = new Chart($('chart'), {
+function buildChart(canvasId, s, cfg) {
+  const [min, max] = sessionBounds(s.points[0].t, cfg.session);
+  const c = new Chart($(canvasId), {
     type: 'line',
     data: { datasets: [{
       data: [],
@@ -361,7 +374,7 @@ function buildChart() {
       layout: { padding: { right: 92, left: 6, bottom: 4 } },
       plugins: {
         legend: { display: false },
-        title: { display: true, text: 'KOSPI200 주간선물', color: '#fff',
+        title: { display: true, text: cfg.title, color: '#fff',
                  font: { size: 14, weight: '700' }, padding: { top: 8, bottom: 10 } },
         tooltip: { enabled: false }  // 십자선 플러그인이 대신 표시
       },
@@ -371,9 +384,9 @@ function buildChart() {
           type: 'linear', min, max,
           grid: { color: 'rgba(255,255,255,0.12)' },
           afterBuildTicks: axis => {
-            // 09:00부터 1시간 간격 + 마감 15:45
+            // 09:00부터 1시간 간격 + 마감 시각
             const ticks = [];
-            for (let h = 9; h <= 15; h++) { const d = new Date(min); d.setHours(h, 0, 0, 0); ticks.push({ value: d.getTime() }); }
+            for (let h = 9; h <= 15; h++) { const d = new Date(min); d.setHours(h, 0, 0, 0); if (d.getTime() < max) ticks.push({ value: d.getTime() }); }
             ticks.push({ value: max });
             axis.ticks = ticks;
           },
@@ -391,6 +404,31 @@ function buildChart() {
     },
     plugins: [overlay, crosshair]
   });
+  c.$s = s; c.$cfg = cfg;
+  return c;
+}
+
+// 차트 데이터 갱신 (선물 차트는 상승·하락 1차 목표선이 항상 보이도록 세로축을 넓힌다)
+function updateChart(c) {
+  const s = c.$s;
+  if (c.$cfg.targets) {
+    const t1 = targets(s.prevClose, s.rv)[0];
+    c.options.scales.y.suggestedMax = t1.up;
+    c.options.scales.y.suggestedMin = t1.down;
+  }
+  c.data.datasets[0].data = s.points.map(d => ({ x: d.t.getTime(), y: d.p }));
+  c.update('none');
+}
+
+// 코스피 차트: 제목에 현재 지수와 전일대비를 함께 표시
+function renderKospi() {
+  const last = kospi.points[kospi.points.length - 1];
+  const chg = last.p - kospi.prevClose;
+  const sign = chg > 0 ? '+' : '';
+  const t = kospiChart.options.plugins.title;
+  t.text = `코스피  ${f2(last.p)}  (${sign}${f2(chg)}, ${sign}${f2(chg / kospi.prevClose * 100)}%)`;
+  t.color = chg > 0 ? '#ff6b6b' : chg < 0 ? '#7aa2ff' : '#fff';
+  updateChart(kospiChart);
 }
 
 function render() {
@@ -417,17 +455,11 @@ function render() {
     $('d' + (i + 1)).textContent = f2(t.down);
   });
 
-  // 상승1차·하락1차 가로선이 항상 보이도록 세로축 범위를 넓힌다
-  const t1 = targets(state.prevClose, state.rv)[0];
-  chart.options.scales.y.suggestedMax = t1.up;
-  chart.options.scales.y.suggestedMin = t1.down;
-  chart.data.datasets[0].data = state.points.map(d => ({ x: d.t.getTime(), y: d.p }));
-  chart.update('none');
+  updateChart(chart);
 }
 
 // 1분봉 + 최신 체결가를 합쳐 차트 포인트를 만든다
-let minutes = [];
-function merge(q) {
+function merge(minutes, q) {
   const pts = minutes.slice();
   const lastBar = pts[pts.length - 1];
   if (!lastBar || q.t - lastBar.t >= 60000) pts.push({ t: q.t, p: q.p });
@@ -435,32 +467,32 @@ function merge(q) {
   return pts;
 }
 
-function applyQuote(q) {
-  state.prevClose = q.prevClose;
-  state.open = q.open; state.high = q.high; state.low = q.low;
-  state.live = q.live; state.updated = q.t;
-  state.points = merge(q);
-  state.rv = realizedVol(state.points);
+function applyQuote(s, q) {
+  s.prevClose = q.prevClose;
+  s.open = q.open; s.high = q.high; s.low = q.low;
+  s.live = q.live; s.updated = q.t;
+  s.points = merge(s.minutes, q);
+  s.rv = realizedVol(s.points);
 }
 
-(async function init() {
-  try {
-    minutes = await DataSource.minute();
-    applyQuote(await DataSource.quote());
-  } catch (e) {
-    $('priceLine').textContent = '시세를 불러오지 못했습니다. server.js 로 실행했는지 확인하세요.';
-    return;
-  }
-  buildChart();
-  render();
-
+// 1분봉을 받아 차트를 만들고 시세를 주기적으로 갱신한다
+async function startFeed(s, cfg, onReady, onUpdate) {
+  s.minutes = await DataSource.minute(cfg.api);
+  applyQuote(s, await DataSource.quote(cfg.api));
+  onReady();
+  onUpdate();
   setInterval(async () => {
-    try { applyQuote(await DataSource.quote()); render(); } catch (e) {}
+    try { applyQuote(s, await DataSource.quote(cfg.api)); onUpdate(); } catch (e) {}
   }, QUOTE_MS);
   setInterval(async () => {
-    try { minutes = await DataSource.minute(); } catch (e) {}
+    try { s.minutes = await DataSource.minute(cfg.api); } catch (e) {}
   }, MINUTE_MS);
-})();
+}
+
+startFeed(state, FUT, () => { chart = buildChart('chart', state, FUT); }, render).catch(() => {
+  $('priceLine').textContent = '시세를 불러오지 못했습니다. server.js 로 실행했는지 확인하세요.';
+});
+startFeed(kospi, KOSPI, () => { kospiChart = buildChart('kospiChart', kospi, KOSPI); }, renderKospi).catch(() => {});
 </script>
 </body>
 </html>

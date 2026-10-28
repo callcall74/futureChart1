@@ -9,6 +9,8 @@ const PORT = process.env.PORT || 8080;
 const ROUTES = {
   '/api/quote': require('./api/quote'),
   '/api/minute': require('./api/minute'),
+  '/api/kospi-quote': require('./api/kospi-quote'),
+  '/api/kospi-minute': require('./api/kospi-minute'),
 };
 
 http.createServer((req, res) => {
